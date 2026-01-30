@@ -1,0 +1,33 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: circle-backend-monitor
+  namespace: circle-prod
+  labels:
+    app: circle-of-trust
+    component: backend
+spec:
+  selector:
+    matchLabels:
+      app: circle-backend
+  endpoints:
+    - port: metrics
+      interval: 30s
+      path: /metrics
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: circle-frontend-monitor
+  namespace: circle-prod
+  labels:
+    app: circle-of-trust
+    component: frontend
+spec:
+  selector:
+    matchLabels:
+      app: circle-frontend
+  endpoints:
+    - port: metrics
+      interval: 30s
+      path: /metrics

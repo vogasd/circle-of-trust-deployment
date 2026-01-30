@@ -1,0 +1,38 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: circle-backend-pdb
+  namespace: circle-prod
+  labels:
+    app: circle-backend
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: circle-backend
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: circle-frontend-pdb
+  namespace: circle-prod
+  labels:
+    app: circle-frontend
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: circle-frontend
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: circle-ollama-pdb
+  namespace: circle-prod
+  labels:
+    app: circle-ollama
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: circle-ollama

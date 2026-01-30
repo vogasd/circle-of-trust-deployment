@@ -1,0 +1,90 @@
+# ArgoCD Application for Circle of Trust
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: circle-of-trust-prod
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: circle-project
+  
+  source:
+    repoURL: https://github.com/your-org/circle-gitops.git
+    targetRevision: main
+    path: overlays/production
+    kustomize:
+      version: v5.0.0
+  
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: circle-prod
+  
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+      allowEmpty: false
+    syncOptions:
+      - CreateNamespace=true
+      - PruneLast=true
+      - RespectIgnoreDifferences=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+  
+  revisionHistoryLimit: 10
+  
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
+    - group: apps
+      kind: StatefulSet
+      jsonPointers:
+        - /spec/replicas
+---
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: circle-project
+  namespace: argocd
+spec:
+  description: Circle of Trust Application Project
+  
+  sourceRepos:
+    - https://github.com/your-org/circle-gitops.git
+  
+  destinations:
+    - namespace: circle-prod
+      server: https://kubernetes.default.svc
+    - namespace: circle-staging
+      server: https://kubernetes.default.svc
+  
+  clusterResourceWhitelist:
+    - group: '*'
+      kind: '*'
+  
+  namespaceResourceWhitelist:
+    - group: '*'
+      kind: '*'
+  
+  roles:
+    - name: admin
+      description: Admin privileges for Circle of Trust
+      policies:
+        - p, proj:circle-project:admin, applications, *, circle-project/*, allow
+      groups:
+        - circle-admins
+    
+    - name: developer
+      description: Developer privileges
+      policies:
+        - p, proj:circle-project:developer, applications, get, circle-project/*, allow
+        - p, proj:circle-project:developer, applications, sync, circle-project/*, allow
+      groups:
+        - circle-developers
