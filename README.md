@@ -692,7 +692,18 @@ Pipeline auto-triggers rollback on deployment/test failures.
 **Manual Rollback via kubectl:**
 ```bash
 # Rollback to previous version
-kubectfiguration Reference
+kubectl rollout undo deployment/circle-backend -n circle-prod
+kubectl rollout undo deployment/circle-frontend -n circle-prod
+kubectl rollout undo statefulset/circle-ollama -n circle-prod
+
+# Check revision history
+kubectl rollout history deployment/circle-backend -n circle-prod
+
+# Rollback to specific revision
+kubectl rollout undo deployment/circle-backend --to-revision=2 -n circle-prod
+```
+
+## Configuration Reference
 
 ### Environment Variables (Jenkinsfile)
 
@@ -851,26 +862,26 @@ This repository contains a complete enterprise-grade CI/CD pipeline with all com
 
 ### Implementation Notes
 
-This is a **pipeline and infrastructure implementation** demonstrating DevOps expertise. The pipeline is designed to deploy the "Circle of Trust" multi-LLM application, with complete infrastructure code ready for deployment.
+This repository provides the **complete CI/CD pipeline and infrastructure configuration** for deploying the "Circle of Trust" multi-LLM application to Azure Kubernetes Service.
 
-**What's Production-Ready:**
-- Complete CI/CD pipeline configuration
-- Full Kubernetes manifest suite
+**Included in This Repository:**
+- Production-ready CI/CD pipeline configuration
+- Complete Kubernetes manifest suite
 - Security scanning and policy enforcement
 - Monitoring and logging infrastructure
 - GitOps deployment workflow
 - Automated testing framework
 
-**What Requires Application Code:**
-To run this pipeline end-to-end, the following application components would need to be added:
-1. Backend application code (`backend/` directory)
-2. Frontend application code (`frontend/` directory)
-3. Dockerfiles for containerization
-4. Actual unit tests for application logic
-5. GitOps repository for ArgoCD
-6. Live AKS cluster and Azure resources
+**Application Components (Not Included):**
+To deploy an actual application, you would need to add:
+1. Backend application code in `backend/` directory
+2. Frontend application code in `frontend/` directory
+3. Dockerfiles for each component
+4. Application-specific unit tests
+5. A separate GitOps repository for ArgoCD
+6. Provisioned AKS cluster and Azure resources
 
-The pipeline infrastructure is **complete and ready to deploy actual applications** - it demonstrates comprehensive understanding of enterprise DevOps practices, CI/CD patterns, and Kubernetes deployment strategies.
+The infrastructure and pipeline code is **ready for immediate use** with any compatible application following the expected structure.
 
 ## Contributing
 
