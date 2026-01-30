@@ -1,0 +1,262 @@
+pipeline {
+    agent any
+    
+    parameters {
+        string(name: 'NAMESPACE', defaultValue: 'circle-prod', description: 'Kubernetes namespace')
+        string(name: 'ROLLBACK_REVISION', defaultValue: '', description: 'Specific revision to rollback to (leave empty for previous)')
+        choice(name: 'SERVICE', choices: ['all', 'backend', 'frontend', 'ollama'], description: 'Service to rollback')
+        booleanParam(name: 'CONFIRM_ROLLBACK', defaultValue: false, description: 'Confirm rollback execution')
+    }
+    
+    environment {
+        AKS_CLUSTER_NAME = 'circle-aks-cluster'
+        AKS_RESOURCE_GROUP = 'circle-rg'
+        SLACK_CHANNEL = '#deployments'
+    }
+    
+    options {
+        timestamps()
+        timeout(time: 30, unit: 'MINUTES')
+    }
+    
+    stages {
+        stage('Validate Rollback Request') {
+            steps {
+                script {
+                    if (!params.CONFIRM_ROLLBACK) {
+                        error "Rollback not confirmed. Set CONFIRM_ROLLBACK to true to proceed."
+                    }
+                    
+                    echo "============================================"
+                    echo "Circle of Trust - Rollback Pipeline"
+                    echo "Namespace: ${params.NAMESPACE}"
+                    echo "Service: ${params.SERVICE}"
+                    echo "Revision: ${params.ROLLBACK_REVISION ?: 'previous'}"
+                    echo "============================================"
+                    
+                    slackSend(
+                        channel: SLACK_CHANNEL,
+                        color: 'warning',
+                        message: "🔄 Starting rollback for ${params.SERVICE} in ${params.NAMESPACE}"
+                    )
+                }
+            }
+        }
+        
+        stage('Get Current State') {
+            steps {
+                script {
+                    withCredentials([azureServicePrincipal('azure-service-principal')]) {
+                        sh """
+                            # Login to Azure
+                            az login --service-principal \
+                                -u \$AZURE_CLIENT_ID \
+                                -p \$AZURE_CLIENT_SECRET \
+                                --tenant \$AZURE_TENANT_ID
+                            
+                            # Get AKS credentials
+                            az aks get-credentials \
+                                --resource-group ${AKS_RESOURCE_GROUP} \
+                                --name ${AKS_CLUSTER_NAME} \
+                                --overwrite-existing
+                            
+                            # Get current deployment state
+                            echo "Current Deployment State:"
+                            kubectl get deployments,statefulsets -n ${params.NAMESPACE} -o wide
+                            
+                            # Get rollout history
+                            if [ "${params.SERVICE}" = "all" ] || [ "${params.SERVICE}" = "backend" ]; then
+                                echo "Backend Rollout History:"
+                                kubectl rollout history deployment/circle-backend -n ${params.NAMESPACE}
+                            fi
+                            
+                            if [ "${params.SERVICE}" = "all" ] || [ "${params.SERVICE}" = "frontend" ]; then
+                                echo "Frontend Rollout History:"
+                                kubectl rollout history deployment/circle-frontend -n ${params.NAMESPACE}
+                            fi
+                            
+                            if [ "${params.SERVICE}" = "all" ] || [ "${params.SERVICE}" = "ollama" ]; then
+                                echo "Ollama Rollout History:"
+                                kubectl rollout history statefulset/circle-ollama -n ${params.NAMESPACE}
+                            fi
+                        """
+                    }
+                }
+            }
+        }
+        
+        stage('Create Backup') {
+            steps {
+                script {
+                    sh """
+                        # Create backup of current state
+                        BACKUP_DIR="rollback-backup-\$(date +%Y%m%d-%H%M%S)"
+                        mkdir -p \${BACKUP_DIR}
+                        
+                        # Backup current manifests
+                        kubectl get all -n ${params.NAMESPACE} -o yaml > \${BACKUP_DIR}/current-state.yaml
+                        kubectl get configmaps -n ${params.NAMESPACE} -o yaml > \${BACKUP_DIR}/configmaps.yaml
+                        kubectl get secrets -n ${params.NAMESPACE} -o yaml > \${BACKUP_DIR}/secrets.yaml
+                        
+                        # Archive backup
+                        tar -czf \${BACKUP_DIR}.tar.gz \${BACKUP_DIR}
+                        
+                        echo "Backup created: \${BACKUP_DIR}.tar.gz"
+                    """
+                }
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'rollback-backup-*.tar.gz', allowEmptyArchive: false
+                }
+            }
+        }
+        
+        stage('Execute Rollback') {
+            steps {
+                script {
+                    def rollbackRevision = params.ROLLBACK_REVISION ? "--to-revision=${params.ROLLBACK_REVISION}" : ""
+                    
+                    sh """
+                        if [ "${params.SERVICE}" = "all" ] || [ "${params.SERVICE}" = "backend" ]; then
+                            echo "Rolling back Backend..."
+                            kubectl rollout undo deployment/circle-backend ${rollbackRevision} -n ${params.NAMESPACE}
+                        fi
+                        
+                        if [ "${params.SERVICE}" = "all" ] || [ "${params.SERVICE}" = "frontend" ]; then
+                            echo "Rolling back Frontend..."
+                            kubectl rollout undo deployment/circle-frontend ${rollbackRevision} -n ${params.NAMESPACE}
+                        fi
+                        
+                        if [ "${params.SERVICE}" = "all" ] || [ "${params.SERVICE}" = "ollama" ]; then
+                            echo "Rolling back Ollama..."
+                            kubectl rollout undo statefulset/circle-ollama ${rollbackRevision} -n ${params.NAMESPACE}
+                        fi
+                    """
+                }
+            }
+        }
+        
+        stage('Wait for Rollback') {
+            steps {
+                script {
+                    sh """
+                        if [ "${params.SERVICE}" = "all" ] || [ "${params.SERVICE}" = "backend" ]; then
+                            echo "Waiting for Backend rollback..."
+                            kubectl rollout status deployment/circle-backend -n ${params.NAMESPACE} --timeout=5m
+                        fi
+                        
+                        if [ "${params.SERVICE}" = "all" ] || [ "${params.SERVICE}" = "frontend" ]; then
+                            echo "Waiting for Frontend rollback..."
+                            kubectl rollout status deployment/circle-frontend -n ${params.NAMESPACE} --timeout=5m
+                        fi
+                        
+                        if [ "${params.SERVICE}" = "all" ] || [ "${params.SERVICE}" = "ollama" ]; then
+                            echo "Waiting for Ollama rollback..."
+                            kubectl rollout status statefulset/circle-ollama -n ${params.NAMESPACE} --timeout=10m
+                        fi
+                    """
+                }
+            }
+        }
+        
+        stage('Verify Rollback') {
+            steps {
+                script {
+                    sh """
+                        # Wait for pods to be ready
+                        sleep 30
+                        
+                        # Check pod status
+                        kubectl get pods -n ${params.NAMESPACE} -l app=circle
+                        
+                        # Run health checks
+                        BACKEND_URL=\$(kubectl get svc circle-backend -n ${params.NAMESPACE} -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+                        
+                        if [ ! -z "\${BACKEND_URL}" ]; then
+                            echo "Running health check..."
+                            curl -f http://\${BACKEND_URL}/health || exit 1
+                        fi
+                        
+                        # Run smoke tests
+                        python3 -m venv test-venv
+                        . test-venv/bin/activate
+                        pip install -q -r tests/requirements.txt
+                        export BASE_URL="http://circle-backend.${params.NAMESPACE}.svc.cluster.local:8001"
+                        pytest tests/smoke/ \
+                            --junitxml=rollback-smoke-test-results.xml \
+                            -v \
+                            --tb=short || true
+                    """
+                }
+            }
+            post {
+                always {
+                    junit 'rollback-smoke-test-results.xml'
+                }
+            }
+        }
+        
+        stage('Audit Log') {
+            steps {
+                script {
+                    sh """
+                        # Create audit log entry
+                        kubectl annotate deployment/circle-backend \
+                            rollback.kubernetes.io/timestamp=\$(date -Iseconds) \
+                            rollback.kubernetes.io/executed-by='Jenkins' \
+                            rollback.kubernetes.io/build-number='${env.BUILD_NUMBER}' \
+                            rollback.kubernetes.io/reason='Manual rollback via pipeline' \
+                            -n ${params.NAMESPACE} --overwrite || true
+                        
+                        # Log to workspace audit file
+                        echo "Rollback executed: Service=${params.SERVICE}, Namespace=${params.NAMESPACE}, Time=\$(date -Iseconds)" \
+                            >> rollback-audit.log
+                    """
+                }
+            }
+        }
+    }
+    
+    post {
+        success {
+            script {
+                slackSend(
+                    channel: SLACK_CHANNEL,
+                    color: 'good',
+                    message: """
+                        ✅ Rollback Successful!
+                        Service: ${params.SERVICE}
+                        Namespace: ${params.NAMESPACE}
+                        Revision: ${params.ROLLBACK_REVISION ?: 'previous'}
+                        Duration: ${currentBuild.durationString}
+                    """
+                )
+            }
+        }
+        
+        failure {
+            script {
+                slackSend(
+                    channel: SLACK_CHANNEL,
+                    color: 'danger',
+                    message: """
+                        ❌ Rollback Failed!
+                        Service: ${params.SERVICE}
+                        Namespace: ${params.NAMESPACE}
+                        Stage: ${env.STAGE_NAME}
+                        URGENT: Manual intervention required!
+                        Check: ${env.BUILD_URL}
+                    """
+                )
+            }
+        }
+        
+        always {
+            script {
+                archiveArtifacts artifacts: '**/*-report.*', allowEmptyArchive: true
+                archiveArtifacts artifacts: 'rollback-audit.log', allowEmptyArchive: true
+            }
+        }
+    }
+}

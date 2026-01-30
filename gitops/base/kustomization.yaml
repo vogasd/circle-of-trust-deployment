@@ -1,0 +1,52 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: circle-prod
+
+# Common labels applied to all resources
+commonLabels:
+  app: circle-of-trust
+  managed-by: kustomize
+
+# Common annotations
+commonAnnotations:
+  deployment.kubernetes.io/tool: kustomize
+  gitops.kubernetes.io/repo: circle-gitops
+
+resources:
+  - namespace.yaml
+  - backend-deployment.yaml
+  - backend-service.yaml
+  - frontend-deployment.yaml
+  - frontend-service.yaml
+  - ollama-statefulset.yaml
+  - ollama-service.yaml
+  - ingress.yaml
+  - hpa.yaml
+  - pdb.yaml
+  - service-monitor.yaml
+  - network-policy.yaml
+  - db-migration-job.yaml
+
+configMapGenerator:
+  - name: circle-config
+    literals:
+      - LOG_LEVEL=info
+      - ENVIRONMENT=production
+
+secretGenerator:
+  - name: circle-secrets
+    type: Opaque
+    envs:
+      - secrets/.env
+
+images:
+  - name: backend
+    newName: circlerecristry.azurecr.io/circle-backend
+    newTag: latest
+  - name: frontend
+    newName: circlerecristry.azurecr.io/circle-frontend
+    newTag: latest
+  - name: ollama
+    newName: circlerecristry.azurecr.io/circle-ollama
+    newTag: latest
